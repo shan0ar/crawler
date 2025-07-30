@@ -180,7 +180,7 @@ MIT License
 
 ## Author
 
-- [Your Name](https://github.com/shan0ar)
+- [shan0ar](https://github.com/shan0ar)
 
 ---
 
