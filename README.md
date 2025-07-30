@@ -29,7 +29,7 @@ It is especially useful for crawling web applications where session cookies are 
 Clone the repo and install dependencies:
 
 ```bash
-git clone https://github.com/yourusername/crawler.git
+git clone https://github.com/shan0ar/crawler.git
 cd crawler
 pip3 install -r requirements.txt
 ```
@@ -180,7 +180,7 @@ MIT License
 
 ## Author
 
-- [Your Name](https://github.com/yourusername)
+- [Your Name](https://github.com/shan0ar)
 
 ---
 
