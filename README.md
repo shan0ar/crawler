@@ -71,7 +71,7 @@ Output files will be saved in `/path/to/outputdir`.
 ### Full example
 
 ```bash
-python3 crawler.py --website "http://192.168.1.10:8080" --depth 5 --cookie "PHPSESSID=abcdef123456" --output /root/Collectes/ProjectX
+python3 crawler.py --website "http://192.168.1.10:8080" --depth 5 --cookie "PHPSESSID=abcdef123456" --output /root/clients/ProjectX
 ```
 
 ---
@@ -126,7 +126,7 @@ URL: https://targetsite.com/logout.php | Method: GET | Depth: 3 | Status: 200 | 
 | `--website, -w`  | Target website (required)                                | `--website "https://targetsite.com"`      |
 | `--depth, -d`    | Maximum crawl depth (default: 3)                         | `--depth 4`                               |
 | `--cookie, -c`   | Session cookie string                                    | `--cookie "PHPSESSID=xxx;token=yyy"`      |
-| `--output, -o`   | Output directory for result files                        | `--output /root/Collectes/ProjectX`       |
+| `--output, -o`   | Output directory for result files                        | `--output /root/clients/ProjectX`       |
 
 ---
 
