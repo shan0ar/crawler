@@ -75,7 +75,7 @@ Output files will be saved in `/path/to/outputdir`.
 ### Full example
 
 ```bash
-crawler --website "http://192.168.1.10:8080" --depth 5 --cookie "PHPSESSID=abcdef123456" --output /root/clients/ProjectX
+crawler --website "http://192.168.1.10:8080" --depth 5 --cookie "PHPSESSID=abcdef123456" --output /root/clients/ProjectX --all
 ```
 
 ---
@@ -159,7 +159,7 @@ The crawler:
 ## Example: Authenticated Penetration Testing
 
 ```bash
-crawler --website "https://testsite.local" --depth 6 --cookie "PHPSESSID=deadbeef" --output /home/user/collect/testsite
+crawler --website "https://testsite.local" --depth 6 --cookie "PHPSESSID=deadbeef" --output /home/user/collect/testsite --all
 ```
 You will get:
 - `/home/user/collect/testsite/<date>-testsite.local.txt` (all discovered URLs)
