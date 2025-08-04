@@ -34,6 +34,8 @@ cd crawler
 python3 -m venv ~/.venv/crawler                                                              
 source ~/.venv/crawler/bin/activate
 pip3 install -r requirements.txt
+sudo cp crawler.py /usr/bin/crawler
+sudo chmod +x /usr/bin/crawler
 ```
 
 **Requirements:**  
@@ -54,26 +56,26 @@ pip3 install requests beautifulsoup4
 ### Basic usage
 
 ```bash
-python3 crawler.py --website "https://targetsite.com" --depth 4
+crawler --website "https://targetsite.com" --depth 4
 ```
 
 ### With session cookie (for authenticated crawling)
 
 ```bash
-python3 crawler.py --website "https://targetsite.com" --depth 4 --cookie "PHPSESSID=xxx;token=yyy"
+crawler --website "https://targetsite.com" --depth 4 --cookie "PHPSESSID=xxx;token=yyy"
 ```
 
 ### Specify output directory
 
 ```bash
-python3 crawler.py --website "https://targetsite.com" --depth 4 --output /path/to/outputdir
+crawler --website "https://targetsite.com" --depth 4 --output /path/to/outputdir
 ```
 Output files will be saved in `/path/to/outputdir`.
 
 ### Full example
 
 ```bash
-python3 crawler.py --website "http://192.168.1.10:8080" --depth 5 --cookie "PHPSESSID=abcdef123456" --output /root/clients/ProjectX
+crawler --website "http://192.168.1.10:8080" --depth 5 --cookie "PHPSESSID=abcdef123456" --output /root/clients/ProjectX
 ```
 
 ---
@@ -128,7 +130,8 @@ URL: https://targetsite.com/logout.php | Method: GET | Depth: 3 | Status: 200 | 
 | `--website, -w`  | Target website (required)                                | `--website "https://targetsite.com"`      |
 | `--depth, -d`    | Maximum crawl depth (default: 3)                         | `--depth 4`                               |
 | `--cookie, -c`   | Session cookie string                                    | `--cookie "PHPSESSID=xxx;token=yyy"`      |
-| `--output, -o`   | Output directory for result files                        | `--output /root/clients/ProjectX`       |
+| `--output, -o`   | Output directory for result files                        | `--output /root/clients/ProjectX`         |
+| `--all`          | Crawl all file extensions (not just web/script types)     | `--all`                                   |
 
 ---
 
@@ -147,7 +150,7 @@ The crawler:
 2. **Copy your session cookie from your browser** (e.g., using Developer Tools).
 3. **Run the crawler with your cookie:**
    ```bash
-   python3 crawler.py --website "https://yourtarget.com" --depth 4 --cookie "PHPSESSID=yourvalue"
+   crawler --website "https://yourtarget.com" --depth 4 --cookie "PHPSESSID=yourvalue"
    ```
 4. **Review output files for discovered endpoints and parameters.**
 
@@ -156,7 +159,7 @@ The crawler:
 ## Example: Authenticated Penetration Testing
 
 ```bash
-python3 crawler.py --website "https://testsite.local" --depth 6 --cookie "PHPSESSID=deadbeef" --output /home/user/collect/testsite
+crawler --website "https://testsite.local" --depth 6 --cookie "PHPSESSID=deadbeef" --output /home/user/collect/testsite
 ```
 You will get:
 - `/home/user/collect/testsite/<date>-testsite.local.txt` (all discovered URLs)
