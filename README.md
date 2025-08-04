@@ -31,6 +31,8 @@ Clone the repo and install dependencies:
 ```bash
 git clone https://github.com/shan0ar/crawler.git
 cd crawler
+python3 -m venv ~/.venv/crawler                                                              
+source ~/.venv/crawler/bin/activate
 pip3 install -r requirements.txt
 ```
 
