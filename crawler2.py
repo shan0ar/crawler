@@ -210,7 +210,7 @@ def is_logout_url(url):
         return True
     return False
 
-allowed_ext = ['php', 'html', 'htm', 'js', 'txt', 'asp', 'aspx', 'jsp']
+allowed_ext = ['php', 'php5', 'html', 'htm', 'js', 'txt', 'asp', 'aspx', 'jsp', 'json', 'xml']
 def should_crawl_file(url, crawl_all):
     path = urlparse(url).path
     if path.endswith('/') or path == '':  # Répertoire
