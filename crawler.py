@@ -1,51 +1,71 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse, parse_qs
 import argparse
-import datetime
-import os
 import re
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from urllib.parse import urljoin, urlparse, parse_qs
-from bs4 import XMLParsedAsHTMLWarning
-import warnings
-warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+import os
+import time
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
+from bs4 import BeautifulSoup
 
-def parse_cookie_string(cookie_str):
-    cookies = {}
-    if cookie_str:
-        for item in cookie_str.split(";"):
-            if "=" in item:
-                k, v = item.split("=", 1)
-                cookies[k.strip()] = v.strip()
-    return cookies
+def normalize_url(url):
+    """Normalize URL to avoid duplicates (remove trailing slashes except root, sort query params)"""
+    parsed = urlparse(url)
+    path = re.sub(r'/+', '/', parsed.path)
+    if path != '/' and path.endswith('/'):
+        path = path.rstrip('/')
+    qs = urlencode(sorted(parse_qsl(parsed.query)))
+    normalized = urlunparse((parsed.scheme, parsed.netloc, path, '', qs, ''))
+    return normalized
 
-def is_allowed_subdomain(netloc, root_domain):
-    netloc = netloc.lower()
-    root_domain = root_domain.lower()
-    return netloc == root_domain or netloc.endswith("." + root_domain)
+def is_allowed_subdomain(url_netloc, root_domain):
+    return url_netloc == root_domain or url_netloc.endswith('.' + root_domain)
 
 def should_ignore_listing(url):
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query)
-    # Ignore URLs with query string like ?C=...;O=...
-    if parsed.query and (
-        parsed.query.startswith("C=")
-        or parsed.query.startswith("O=")
-        or "C=" in parsed.query
-        or "O=" in parsed.query
-    ):
-        return True
-    # Also ignore index listing URLs like "?C=N;O=A" etc.
-    if re.match(r'^C=[A-Z];O=[A-Z]$', parsed.query):
-        return True
+    IGNORE = [
+        '/logout', '/deconnexion', '/logoff', '/signout', '/disconnect',
+        '/log-out', '/user/logout'
+    ]
+    for ign in IGNORE:
+        if ign in url:
+            return True
     return False
 
+def is_logout_url(url):
+    url_lower = url.lower()
+    LOGOUT_WORDS = [
+        'logout', 'deconnexion', 'logoff', 'signout', 'disconnect'
+    ]
+    for word in LOGOUT_WORDS:
+        if word in url_lower:
+            return True
+    return False
+
+def should_crawl_file(url, crawl_all):
+    if crawl_all:
+        return True
+    STATIC_EXT = [
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.ico', '.css', '.js',
+        '.woff', '.woff2', '.ttf', '.eot', '.mp3', '.mp4', '.m4a', '.ogg', '.webm',
+        '.avi', '.mov', '.pdf', '.zip', '.tar', '.gz', '.bz2', '.rar', '.7z', '.exe',
+        '.dmg', '.iso', '.apk', '.msi', '.csv', '.xls', '.xlsx', '.doc', '.docx',
+        '.ppt', '.pptx'
+    ]
+    for ext in STATIC_EXT:
+        # On ignore les fichiers statiques SANS --all
+        if url.lower().split('?',1)[0].endswith(ext):
+            return False
+    return True
+
 def extract_hrefs(html, base_url, root_domain):
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception as e:
+        print(f"Impossible de parser {base_url} : {e}")
+        return set(), set()
     hrefs = set()
+    hrefs_no_ext = set()
     tag_attr_pairs = [
         ('a', 'href'),
         ('link', 'href'),
@@ -76,71 +96,20 @@ def extract_hrefs(html, base_url, root_domain):
                     and not full_url.strip() == "https://"
                     and not should_ignore_listing(full_url)
                 ):
-                    hrefs.add(full_url.split('#')[0])
-    return hrefs
-
-def extract_css_links(css_content, base_url):
-    urls = set()
-    for match in re.findall(r"url\(['\"]?(.*?)['\"]?\)", css_content, re.IGNORECASE):
-        full_url = urljoin(base_url, match)
-        urls.add(full_url)
-    for match in re.findall(r"@import\s+['\"](.*?)['\"]", css_content, re.IGNORECASE):
-        full_url = urljoin(base_url, match)
-        urls.add(full_url)
-    return urls
-
-def extract_js_links(js_content, base_url):
-    urls = set()
-    for match in re.findall(r"import.*?['\"](.*?)['\"]", js_content):
-        full_url = urljoin(base_url, match)
-        urls.add(full_url)
-    for match in re.findall(r"require\(['\"](.*?)['\"]\)", js_content):
-        full_url = urljoin(base_url, match)
-        urls.add(full_url)
-    return urls
-
-def extract_post_forms(html, base_url, root_domain):
-    soup = BeautifulSoup(html, "html.parser")
-    post_forms = []
-    for form in soup.find_all('form'):
-        method = form.get('method', '').lower()
-        if method == 'post':
-            action = form.get('action')
-            if not action:
-                continue
-            post_url = urljoin(base_url, action)
-            parsed_post_url = urlparse(post_url)
-            if (parsed_post_url.scheme in ['http', 'https']
-                and is_allowed_subdomain(parsed_post_url.netloc, root_domain)
-                and parsed_post_url.netloc != ""):
-                data = {}
-                for input_tag in form.find_all('input'):
-                    name = input_tag.get('name')
-                    value = input_tag.get('value', '')
-                    if name: data[name] = value
-                for textarea in form.find_all('textarea'):
-                    name = textarea.get('name')
-                    value = textarea.text
-                    if name: data[name] = value
-                for select in form.find_all('select'):
-                    name = select.get('name')
-                    value = ''
-                    opt = select.find('option', selected=True)
-                    if opt:
-                        value = opt.get('value', '')
-                    elif select.find('option'):
-                        value = select.find('option').get('value','')
-                    if name: data[name] = value
-                post_forms.append((post_url, data))
-    return post_forms
-
-def extract_get_params(url):
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query)
-    return [str(k) for k in qs.keys()]
+                    clean_url = full_url.split('#')[0]
+                    hrefs.add(clean_url)
+                    path = parsed.path
+                    filename = path.rstrip('/').split('/')[-1]
+                    if (filename and '.' not in filename and filename != '') or (path.endswith('/') and path != '/'):
+                        hrefs_no_ext.add(clean_url)
+    return hrefs, hrefs_no_ext
 
 def extract_post_params_and_values(html):
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception as e:
+        print(f"Impossible de parser dans extract_post_params_and_values : {e}")
+        return []
     params = []
     for form in soup.find_all('form'):
         method = form.get('method', '').lower()
@@ -181,261 +150,123 @@ def extract_post_params_and_values(html):
                         params.append(name)
     return params
 
-def format_brut_line(url, get_params):
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query)
-    params_to_add = [p for p in get_params if p not in qs]
-    if get_params and params_to_add:
-        sep = '&' if parsed.query else '?'
-        return "{}{}{}".format(url, sep, "&".join(["{}=".format(param) for param in params_to_add]))
-    else:
-        return url
-
-def is_logout_url(url):
-    url_lower = url.lower()
-    parsed = urlparse(url_lower)
-    path = parsed.path
-    query = parsed.query
-    if (
-        path.endswith("logout.php")
-        or path.endswith("disconnect.php")
-        or path.endswith("exit.php")
-        or path.endswith("logout")
-        or (path.endswith("login.php") and "logout=1" in query)
-    ):
-        return True
-    if url_lower.endswith("logout") or url_lower.endswith("logout.php") or url_lower.endswith("disconnect.php") or url_lower.endswith("exit.php"):
-        return True
-    if "login.php?logout=1" in url_lower:
-        return True
-    return False
-
-allowed_ext = ['php', 'php5', 'html', 'htm', 'js', 'txt', 'asp', 'aspx', 'jsp', 'json', 'xml']
-def should_crawl_file(url, crawl_all):
-    path = urlparse(url).path
-    if path.endswith('/') or path == '':  # Répertoire
-        return True
-    ext = os.path.splitext(path)[1][1:].lower()
-    if crawl_all:
-        return True
-    return ext in allowed_ext
-
-def crawl(start_url, max_depth, root_domain, output_file_brut, output_file_info, cookie_str, crawl_all):
+def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, cookie=None, crawl_all=False):
     visited = set()
-    result = {}
+    to_visit = []
     detected_logout_urls = set()
-    url_depths = {}
-    to_visit = [(start_url, 1, 'GET', None)]
+    found_post_params = {}
+    all_no_ext_links = set()
+    crawl_report = []
 
     session = requests.Session()
-    if cookie_str:
-        cookies = parse_cookie_string(cookie_str)
-        session.cookies.update(cookies)
+    if cookie:
+        cookies_dict = {}
+        for c in cookie.split(';'):
+            if '=' in c:
+                k, v = c.strip().split('=', 1)
+                cookies_dict[k] = v
+        session.cookies.update(cookies_dict)
+
+    start_url_norm = normalize_url(website)
+    to_visit.append((start_url_norm, 1, 'GET', None))
 
     while to_visit:
-        current_url, depth, method, data = to_visit.pop(0)
-        if (current_url, method) in visited or depth > max_depth:
+        current_url, depth, method, post_params = to_visit.pop(0)
+        current_url_norm = normalize_url(current_url)
+        # Ici on filtre les fichiers statiques SANS --all
+        if not should_crawl_file(current_url, crawl_all):
             continue
-        visited.add((current_url, method))
-        url_depths[(current_url, method)] = depth
-
-        print(f"Crawling ({depth}/{max_depth}): {current_url}")
-
-        if should_ignore_listing(current_url):
+        if (current_url_norm, method) in visited or depth > depth_max:
             continue
+        print(f"Crawling ({depth}/{depth_max}): {current_url}")
+        visited.add((current_url_norm, method))
 
         try:
             if method == 'GET':
-                r = session.get(current_url, verify=False, timeout=10)
+                resp = session.get(current_url, allow_redirects=True, timeout=10, verify=False)
+            elif method == 'POST':
+                resp = session.post(current_url, data=post_params, allow_redirects=True, timeout=10, verify=False)
             else:
-                r = session.post(current_url, data=data, verify=False, timeout=10)
-            status_code = r.status_code
-            page_size = len(r.content)
-            html = r.text
-            content_type = r.headers.get('Content-Type', '').lower()
-        except Exception:
-            status_code = "ERR"
-            page_size = 0
-            html = ""
-            content_type = ""
-
-        parsed_url = urlparse(current_url)
-        hrefs = extract_hrefs(html, current_url, root_domain)
-        for h in hrefs:
-            if is_logout_url(h) or should_ignore_listing(h):
-                detected_logout_urls.add(h)
                 continue
-            # Toujours crawler les répertoires, filtrer les fichiers selon --all
-            if should_crawl_file(h, crawl_all):
-                if (h, 'GET') not in visited and all((h, 'GET') != (x[0], x[2]) for x in to_visit):
-                    to_visit.append((h, depth+1, 'GET', None))
-                # Ajoute le dossier parent à crawler
-                parsed_h = urlparse(h)
-                dir_path = os.path.dirname(parsed_h.path)
-                if dir_path and not dir_path.endswith('/'):
-                    dir_path += '/'
-                dir_url = f"{parsed_h.scheme}://{parsed_h.netloc}{dir_path}"
-                if dir_url not in [x[0] for x in to_visit] and (dir_url, 'GET') not in visited and not should_ignore_listing(dir_url):
-                    to_visit.append((dir_url, depth+1, 'GET', None))
+        except Exception as e:
+            print(f"Erreur sur {current_url}: {e}")
+            continue
 
-        post_forms = extract_post_forms(html, current_url, root_domain)
-        for post_url, post_data in post_forms:
-            if is_logout_url(post_url) or should_ignore_listing(post_url):
-                detected_logout_urls.add(post_url)
-                continue
-            if should_crawl_file(post_url, crawl_all):
-                if (post_url, 'POST') not in visited and all((post_url, 'POST') != (x[0], x[2]) for x in to_visit):
-                    to_visit.append((post_url, depth+1, 'POST', post_data))
-                # Ajoute le dossier parent à crawler
-                parsed_post = urlparse(post_url)
-                dir_path = os.path.dirname(parsed_post.path)
-                if dir_path and not dir_path.endswith('/'):
-                    dir_path += '/'
-                dir_url = f"{parsed_post.scheme}://{parsed_post.netloc}{dir_path}"
-                if dir_url not in [x[0] for x in to_visit] and (dir_url, 'GET') not in visited and not should_ignore_listing(dir_url):
-                    to_visit.append((dir_url, depth+1, 'GET', None))
+        status = resp.status_code
+        size = len(resp.content)
+        crawl_report.append({
+            "url": current_url,
+            "method": method,
+            "depth": depth,
+            "status": status,
+            "size": size,
+            "post_params": post_params if method == 'POST' else None
+        })
 
-        if any(current_url.lower().endswith(ext) for ext in ['.css', '.js']):
-            try:
-                content = html
-                if current_url.lower().endswith('.css'):
-                    css_links = extract_css_links(content, current_url)
-                    for l in css_links:
-                        parsed_l = urlparse(l)
-                        if (
-                            parsed_l.scheme in ["http", "https"]
-                            and is_allowed_subdomain(parsed_l.netloc, root_domain)
-                            and should_crawl_file(l, crawl_all)
-                            and (l, 'GET') not in visited
-                            and all((l, 'GET') != (x[0], x[2]) for x in to_visit)
-                            and not should_ignore_listing(l)
-                        ):
-                            to_visit.append((l, depth+1, 'GET', None))
-                        # Ajoute le dossier parent à crawler
-                        dir_path = os.path.dirname(parsed_l.path)
-                        if dir_path and not dir_path.endswith('/'):
-                            dir_path += '/'
-                        dir_url = f"{parsed_l.scheme}://{parsed_l.netloc}{dir_path}"
-                        if dir_url not in [x[0] for x in to_visit] and (dir_url, 'GET') not in visited and not should_ignore_listing(dir_url):
-                            to_visit.append((dir_url, depth+1, 'GET', None))
-                if current_url.lower().endswith('.js'):
-                    js_links = extract_js_links(content, current_url)
-                    for l in js_links:
-                        parsed_l = urlparse(l)
-                        if (
-                            parsed_l.scheme in ["http", "https"]
-                            and is_allowed_subdomain(parsed_l.netloc, root_domain)
-                            and should_crawl_file(l, crawl_all)
-                            and (l, 'GET') not in visited
-                            and all((l, 'GET') != (x[0], x[2]) for x in to_visit)
-                            and not should_ignore_listing(l)
-                        ):
-                            to_visit.append((l, depth+1, 'GET', None))
-                        # Ajoute le dossier parent à crawler
-                        dir_path = os.path.dirname(parsed_l.path)
-                        if dir_path and not dir_path.endswith('/'):
-                            dir_path += '/'
-                        dir_url = f"{parsed_l.scheme}://{parsed_l.netloc}{dir_path}"
-                        if dir_url not in [x[0] for x in to_visit] and (dir_url, 'GET') not in visited and not should_ignore_listing(dir_url):
-                            to_visit.append((dir_url, depth+1, 'GET', None))
-            except Exception:
-                pass
+        with open(output_file_brut, 'a', encoding='utf-8') as f:
+            f.write(f"{current_url}\t{method}\t{status}\t{size}\n")
+        with open(output_file_info, 'a', encoding='utf-8') as f:
+            f.write(f"URL: {current_url}\nStatus: {status}\nSize: {size}\n\n")
 
-        get_params = extract_get_params(current_url)
-        post_params = extract_post_params_and_values(html)
+        if resp.headers.get('content-type', '').startswith('text/html'):
+            html = resp.text
+            hrefs, hrefs_no_ext = extract_hrefs(html, current_url, root_domain)
+            all_no_ext_links.update(hrefs_no_ext)
+            for h in hrefs:
+                h_norm = normalize_url(h)
+                if is_logout_url(h) or should_ignore_listing(h):
+                    detected_logout_urls.add(h)
+                    continue
+                if should_crawl_file(h, crawl_all):
+                    already_seen = ((h_norm, 'GET') in visited or any(normalize_url(x[0]) == h_norm and x[2] == 'GET' for x in to_visit))
+                    if not already_seen:
+                        to_visit.append((h, depth+1, 'GET', None))
+                    parsed_h = urlparse(h)
+                    dir_path = os.path.dirname(parsed_h.path)
+                    if dir_path and not dir_path.endswith('/'):
+                        dir_path += '/'
+                    dir_url = f"{parsed_h.scheme}://{parsed_h.netloc}{dir_path}"
+                    dir_url_norm = normalize_url(dir_url)
+                    already_seen_dir = ((dir_url_norm, 'GET') in visited or any(normalize_url(x[0]) == dir_url_norm and x[2] == 'GET' for x in to_visit))
+                    if dir_path and not already_seen_dir and not should_ignore_listing(dir_url):
+                        to_visit.append((dir_url, depth+1, 'GET', None))
 
-        result[(current_url, method)] = {
-            'url': current_url,
-            'get': get_params,
-            'post': post_params,
-            'status': status_code,
-            'size': page_size,
-            'method': method
-        }
+            params = extract_post_params_and_values(html)
+            if params:
+                found_post_params[current_url] = params
 
-    urls_map = {}
-    for key in sorted(result.keys()):
-        url, method = key
-        if method == 'GET':
-            parsed = urlparse(url)
-            base_url = "{}://{}{}".format(parsed.scheme, parsed.netloc, parsed.path)
-            if base_url not in urls_map:
-                urls_map[base_url] = []
-            urls_map[base_url].append((url, parse_qs(parsed.query)))
+    # COMPTE RENDU GLOBAL
+    print("\n--- COMPTE RENDU GLOBAL DU CRAWL ---")
+    for entry in crawl_report:
+        if entry["method"] == "POST":
+            pp = entry["post_params"] if entry["post_params"] else ""
+            nb_post = len(pp.split("&")) if isinstance(pp, str) and pp else (len(pp) if isinstance(pp, list) else 0)
+            print(f'URL: {entry["url"]} | Method: POST | Depth: {entry["depth"]} | POST: {pp} | Nb_POST: {nb_post} | Status: {entry["status"]} | Size: {entry["size"]}')
+        elif entry["method"] == "GET":
+            if entry["post_params"]:
+                nb_get = len(entry["post_params"].split("&")) if isinstance(entry["post_params"], str) else (len(entry["post_params"]) if entry["post_params"] else 0)
+                print(f'URL: {entry["url"]} | Method: GET | Depth: {entry["depth"]} | GET: {entry["post_params"]} | Nb_GET: {nb_get} | Status: {entry["status"]} | Size: {entry["size"]}')
+            else:
+                print(f'URL: {entry["url"]} | Method: GET | Depth: {entry["depth"]} | Status: {entry["status"]} | Size: {entry["size"]}')
 
-    for logout_url in detected_logout_urls:
-        parsed = urlparse(logout_url)
-        base_url = "{}://{}{}".format(parsed.scheme, parsed.netloc, parsed.path)
-        if base_url not in urls_map:
-            urls_map[base_url] = []
-        urls_map[base_url].append((logout_url, parse_qs(parsed.query)))
-
-    lines = []
-    for base_url in sorted(urls_map.keys()):
-        already_printed = set()
-        lines.append(base_url)
-        already_printed.add(base_url)
-        for full_url, param_dict in sorted(urls_map[base_url]):
-            if full_url != base_url and full_url not in already_printed:
-                lines.append(full_url)
-                already_printed.add(full_url)
-
-    with open(output_file_brut, 'w', encoding='utf-8') as f:
-        for line in lines:
-            f.write(line + "\n")
-
-    with open(output_file_info, 'w', encoding='utf-8') as f:
-        for key in sorted(result.keys()):
-            url, method = key
-            depth = url_depths.get((url, method), "?")
-            parts = [f"URL: {url}"]
-            parts.append(f"Method: {method}")
-            parts.append(f"Depth: {depth}")
-            if result[key]['get']:
-                parts.append("GET: " + ",".join(result[key]['get']))
-                parts.append(f"Nb_GET: {len(result[key]['get'])}")
-            if result[key]['post']:
-                parts.append("POST: " + ",".join(result[key]['post']))
-                parts.append(f"Nb_POST: {len(result[key]['post'])}")
-            parts.append(f"Status: {result[key]['status']}")
-            parts.append(f"Size: {result[key]['size']}")
-            line = " | ".join(parts)
-            if is_logout_url(url):
-                line += " (not crawled to avoid breaking the cookie)"
-            f.write(line + "\n")
-            print(line)
-        for logout_url in detected_logout_urls:
-            if (logout_url, 'GET') not in result and (logout_url, 'POST') not in result:
-                line = f"URL: {logout_url}"
-                line += " | (not crawled to avoid breaking the cookie)"
-                f.write(line + "\n")
-                print(line)
-    print(f"Output written to: {output_file_brut}, {output_file_info}")
+    print(f"\nOutput written to: {output_file_brut}, {output_file_info}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--website", "-w", required=True, help="Target website")
-    parser.add_argument("--depth", "-d", type=int, default=3, help="Maximum crawl depth")
-    parser.add_argument("--cookie", "-c", default="", help="Session cookie (example: PHPSESSID=xxx;token=yyy)")
-    parser.add_argument("--output", "-o", default="", help="Output directory for files")
-    parser.add_argument("--all", action="store_true", help="Crawl all files regardless of extension")
+    parser.add_argument('--website', required=True, help='URL du site à crawler')
+    parser.add_argument('--depth', type=int, default=5, help='Profondeur maximale')
+    parser.add_argument('--output', required=True, help='Fichier de sortie (basename, 2 fichiers seront créés)')
+    parser.add_argument('--cookie', default=None, help='Cookies à utiliser pour la session')
+    parser.add_argument('--all', action='store_true', help='Inclure les fichiers statiques')
     args = parser.parse_args()
 
-    dt = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    root_domain = urlparse(args.website).netloc
+    website = args.website.rstrip('/')
+    root_domain = urlparse(website).netloc
 
-    output_dir = args.output.strip()
-    if output_dir:
-        if not os.path.isdir(output_dir):
-            try:
-                os.makedirs(output_dir)
-            except Exception as e:
-                print("Error creating output directory:", e)
-                exit(1)
-        output_file_brut = os.path.join(output_dir, f"{dt}-{root_domain}.txt")
-        output_file_info = os.path.join(output_dir, f"{dt}-{root_domain}_info.txt")
-    else:
-        output_file_brut = f"{dt}-{root_domain}.txt"
-        output_file_info = f"{dt}-{root_domain}_info.txt"
+    tstamp = time.strftime('%Y%m%d_%H%M%S')
+    output_file_brut = f"{args.output}/{tstamp}-{root_domain}.txt"
+    output_file_info = f"{args.output}/{tstamp}-{root_domain}_info.txt"
 
-    crawl(args.website, args.depth, root_domain, output_file_brut, output_file_info, args.cookie, args.all)
+    requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
+
+    crawl(website, args.depth, root_domain, output_file_brut, output_file_info, args.cookie, args.all)
