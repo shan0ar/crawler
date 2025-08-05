@@ -10,7 +10,6 @@ from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 from bs4 import BeautifulSoup
 
 def normalize_url(url):
-    """Normalize URL to avoid duplicates (remove trailing slashes except root, sort query params)"""
     parsed = urlparse(url)
     path = re.sub(r'/+', '/', parsed.path)
     if path != '/' and path.endswith('/'):
@@ -53,19 +52,29 @@ def should_crawl_file(url, crawl_all):
         '.ppt', '.pptx'
     ]
     for ext in STATIC_EXT:
-        # On ignore les fichiers statiques SANS --all
         if url.lower().split('?',1)[0].endswith(ext):
             return False
     return True
 
-def extract_hrefs(html, base_url, root_domain):
+def extract_hrefs_and_forms(html, base_url, root_domain):
+    """
+    Extracts hrefs (GET) and forms (POST) for crawling,
+    and for displaying expected POST parameters.
+    Returns:
+        - hrefs: set of URLs to crawl (for GET)
+        - hrefs_no_ext: set of URLs without extension (for directories)
+        - forms_found: list of dict {'url':..., 'params':...} for each POST form found
+    """
     try:
         soup = BeautifulSoup(html, "html.parser")
     except Exception as e:
-        print(f"Impossible de parser {base_url} : {e}")
-        return set(), set()
+        print(f"Failed to parse {base_url}: {e}")
+        return set(), set(), []
+
     hrefs = set()
     hrefs_no_ext = set()
+    forms_found = []
+
     tag_attr_pairs = [
         ('a', 'href'),
         ('link', 'href'),
@@ -102,18 +111,19 @@ def extract_hrefs(html, base_url, root_domain):
                     filename = path.rstrip('/').split('/')[-1]
                     if (filename and '.' not in filename and filename != '') or (path.endswith('/') and path != '/'):
                         hrefs_no_ext.add(clean_url)
-    return hrefs, hrefs_no_ext
 
-def extract_post_params_and_values(html):
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-    except Exception as e:
-        print(f"Impossible de parser dans extract_post_params_and_values : {e}")
-        return []
-    params = []
+    # Extract POST forms (action + expected params)
     for form in soup.find_all('form'):
         method = form.get('method', '').lower()
-        if method == 'post':
+        action = form.get('action', '')
+        form_url = urljoin(base_url, action) if action else base_url
+        if (
+            method == 'post'
+            and urlparse(form_url).scheme in ["http", "https"]
+            and is_allowed_subdomain(urlparse(form_url).netloc, root_domain)
+            and not should_ignore_listing(form_url)
+        ):
+            params = []
             for input_tag in form.find_all('input'):
                 name = input_tag.get('name')
                 value = input_tag.get('value', '')
@@ -148,15 +158,40 @@ def extract_post_params_and_values(html):
                         params.append(f"{name}={value}")
                     else:
                         params.append(name)
-    return params
+            forms_found.append({
+                'url': form_url,
+                'params': params
+            })
+
+    return hrefs, hrefs_no_ext, forms_found
+
+def get_expected_method_and_params(url, found_forms):
+    """
+    For a given url, check if there is a POST form matching this url.
+    If so, returns ("POST", params), otherwise ("GET", params) if GET params exist, otherwise ("GET", None)
+    """
+    for form in found_forms:
+        if normalize_url(form['url']) == normalize_url(url):
+            return "POST", form['params']
+    # If GET params exist in URL
+    if '?' in url:
+        params = []
+        query = urlparse(url).query
+        for k, v in parse_qsl(query):
+            if v:
+                params.append(f"{k}={v}")
+            else:
+                params.append(k)
+        return "GET", params if params else None
+    return "GET", None
 
 def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, cookie=None, crawl_all=False):
     visited = set()
     to_visit = []
     detected_logout_urls = set()
-    found_post_params = {}
     all_no_ext_links = set()
     crawl_report = []
+    found_forms = []
 
     session = requests.Session()
     if cookie:
@@ -170,10 +205,12 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
     start_url_norm = normalize_url(website)
     to_visit.append((start_url_norm, 1, 'GET', None))
 
+    # This will collect all forms found in the crawl, for reporting expected methods
+    all_found_forms = []
+
     while to_visit:
         current_url, depth, method, post_params = to_visit.pop(0)
         current_url_norm = normalize_url(current_url)
-        # Ici on filtre les fichiers statiques SANS --all
         if not should_crawl_file(current_url, crawl_all):
             continue
         if (current_url_norm, method) in visited or depth > depth_max:
@@ -189,7 +226,7 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
             else:
                 continue
         except Exception as e:
-            print(f"Erreur sur {current_url}: {e}")
+            print(f"Error on {current_url}: {e}")
             continue
 
         status = resp.status_code
@@ -210,8 +247,11 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
 
         if resp.headers.get('content-type', '').startswith('text/html'):
             html = resp.text
-            hrefs, hrefs_no_ext = extract_hrefs(html, current_url, root_domain)
+            hrefs, hrefs_no_ext, forms_found = extract_hrefs_and_forms(html, current_url, root_domain)
             all_no_ext_links.update(hrefs_no_ext)
+            all_found_forms.extend([dict(f, depth=depth) for f in forms_found])  # Keep track of all forms for report
+
+            # Standard GET crawling
             for h in hrefs:
                 h_norm = normalize_url(h)
                 if is_logout_url(h) or should_ignore_listing(h):
@@ -231,33 +271,49 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
                     if dir_path and not already_seen_dir and not should_ignore_listing(dir_url):
                         to_visit.append((dir_url, depth+1, 'GET', None))
 
-            params = extract_post_params_and_values(html)
-            if params:
-                found_post_params[current_url] = params
+            # Store found POST forms (displayed later)
+            for form in forms_found:
+                found_forms.append({
+                    "url": form['url'],
+                    "params": form['params'],
+                    "depth": depth
+                })
 
-    # COMPTE RENDU GLOBAL
-    print("\n--- COMPTE RENDU GLOBAL DU CRAWL ---")
+    # GLOBAL CRAWL REPORT
+    print("\n--- GLOBAL CRAWL REPORT ---")
     for entry in crawl_report:
-        if entry["method"] == "POST":
-            pp = entry["post_params"] if entry["post_params"] else ""
-            nb_post = len(pp.split("&")) if isinstance(pp, str) and pp else (len(pp) if isinstance(pp, list) else 0)
-            print(f'URL: {entry["url"]} | Method: POST | Depth: {entry["depth"]} | POST: {pp} | Nb_POST: {nb_post} | Status: {entry["status"]} | Size: {entry["size"]}')
-        elif entry["method"] == "GET":
-            if entry["post_params"]:
-                nb_get = len(entry["post_params"].split("&")) if isinstance(entry["post_params"], str) else (len(entry["post_params"]) if entry["post_params"] else 0)
-                print(f'URL: {entry["url"]} | Method: GET | Depth: {entry["depth"]} | GET: {entry["post_params"]} | Nb_GET: {nb_get} | Status: {entry["status"]} | Size: {entry["size"]}')
-            else:
-                print(f'URL: {entry["url"]} | Method: GET | Depth: {entry["depth"]} | Status: {entry["status"]} | Size: {entry["size"]}')
+        expected_method, params = get_expected_method_and_params(entry["url"], all_found_forms)
+        out = f'URL: {entry["url"]} | Method: {entry["method"]} | Depth: {entry["depth"]}'
+
+        if expected_method == "POST" and params:
+            out += f' | POST: {",".join(params)} | Nb_POST: {len(params)}'
+        elif expected_method == "GET" and params:
+            out += f' | GET: {",".join(params)} | Nb_GET: {len(params)}'
+
+        out += f' | Status: {entry["status"]} | Size: {entry["size"]}'
+        print(out)
+
+    # Display found POST forms (action + expected params)
+    print("\n--- FOUND POST FORMS ---")
+    # Remove duplicates for display
+    already_seen_forms = set()
+    for form in all_found_forms:
+        key = (normalize_url(form['url']), ','.join(form['params']) if form['params'] else '', form['depth'])
+        if key in already_seen_forms:
+            continue
+        already_seen_forms.add(key)
+        params_str = ', '.join(form['params']) if form['params'] else '(no parameters)'
+        print(f"Found POST form URL: {form['url']} | Expected parameters: {params_str} | Depth: {form['depth']}")
 
     print(f"\nOutput written to: {output_file_brut}, {output_file_info}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--website', required=True, help='URL du site à crawler')
-    parser.add_argument('--depth', type=int, default=5, help='Profondeur maximale')
-    parser.add_argument('--output', required=True, help='Fichier de sortie (basename, 2 fichiers seront créés)')
-    parser.add_argument('--cookie', default=None, help='Cookies à utiliser pour la session')
-    parser.add_argument('--all', action='store_true', help='Inclure les fichiers statiques')
+    parser.add_argument('--website', required=True, help='URL of the site to crawl')
+    parser.add_argument('--depth', type=int, default=5, help='Maximum depth')
+    parser.add_argument('--output', required=True, help='Output file (basename, 2 files will be created)')
+    parser.add_argument('--cookie', default=None, help='Cookies to use for the session')
+    parser.add_argument('--all', action='store_true', help='Include static files')
     args = parser.parse_args()
 
     website = args.website.rstrip('/')
