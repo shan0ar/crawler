@@ -122,7 +122,7 @@ def extract_hrefs_and_forms(html, base_url, root_domain):
         ('input', 'src'),
         ('frame', 'src'),
     ]
-    # 1. Extraire tous les liens href (GET par défaut)
+
     for tag, attr in tag_attr_pairs:
         for node in soup.find_all(tag):
             url = node.get(attr)
@@ -139,7 +139,6 @@ def extract_hrefs_and_forms(html, base_url, root_domain):
                     and not is_listing_artifact(full_url)
                 ):
                     clean_url = full_url.split('#')[0]
-                    # S'il s'agit d'un <form>, on traitera la méthode plus bas !
                     if tag == 'form':
                         continue
                     hrefs.add((clean_url, "GET"))
@@ -148,11 +147,11 @@ def extract_hrefs_and_forms(html, base_url, root_domain):
                     if (filename and '.' not in filename and filename != '') or (path.endswith('/') and path != '/'):
                         hrefs_no_ext.add(clean_url)
 
-    # 2. Extraire tous les <form> (POST, mais aussi GET si spécifié)
+
     for form in soup.find_all('form'):
         method = form.get('method', '').lower()
         if not method:
-            method = 'get'  # HTML default
+            method = 'get'
         action = form.get('action', '')
         form_url = urljoin(base_url, action) if action else base_url
         if (
@@ -211,14 +210,12 @@ def extract_hrefs_and_forms(html, base_url, root_domain):
     return hrefs, hrefs_no_ext, forms_found
 
 def get_expected_method_and_params(url, found_forms):
-    # Ignore params for listing artifacts
     if is_listing_artifact(url):
         return "GET", None
     for form in found_forms:
         if normalize_url(form['url']) == normalize_url(url):
             return form.get('method', 'POST'), form['params']
     if '?' in url:
-        # Only return params if not a listing artifact
         if is_listing_artifact(url):
             return "GET", None
         params = []
@@ -279,15 +276,14 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
     post_params_count = 0
     page_count = 0
 
-    # Sets to avoid duplicates in output
     written_txt_urls = set()
     written_info_lines = set()
 
-    # For summary stats
+
     ext_counter = Counter()
     folder_counter = Counter()
-    get_param_urls = defaultdict(list)  # param_name: [urls]
-    post_param_urls = defaultdict(list) # param_name: [urls]
+    get_param_urls = defaultdict(list)
+    post_param_urls = defaultdict(list)
 
     session = requests.Session()
     if cookie:
@@ -307,7 +303,6 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
     while to_visit:
         current_url, depth, method, post_params = to_visit.pop(0)
         current_url_norm = normalize_url(current_url)
-        # Filter out listing artifact URLs everywhere
         if is_listing_artifact(current_url):
             continue
         if not should_crawl_file(current_url, crawl_all):
@@ -319,7 +314,6 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
         visited.add((current_url_norm, method))
         page_count += 1
 
-        # Correction : transformer post_params (list) en dict pour requests.post()
         if method == 'POST' and post_params is not None:
             post_dict = {}
             for p in post_params:
@@ -353,14 +347,12 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
             "post_params": post_params if method == 'POST' else None
         })
 
-        # Fichier .txt = uniquement les URLs (une par ligne, nettoyée, sans doublon)
         clean_url_txt = clean_txt_url(current_url)
         if clean_url_txt not in written_txt_urls:
             with open(output_file_brut, 'a', encoding='utf-8') as f:
                 f.write(f"{clean_url_txt}\n")
             written_txt_urls.add(clean_url_txt)
 
-        # Pour les stats d'extension/folders
         ext = get_file_extension(current_url)
         if ext:
             ext_counter[ext] += 1
@@ -368,7 +360,6 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
         if folder:
             folder_counter[folder] += 1
 
-        # Pour les stats de paramètres GET/POST
         expected_method, expected_params = get_expected_method_and_params(current_url, all_found_forms)
         if expected_method == "GET" and expected_params:
             get_params_count += len(expected_params)
@@ -383,7 +374,6 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
         if silent:
             print_silent_status(start_time, page_count, get_params_count, post_params_count)
 
-        # Pour info.txt, on veut tout sur une ligne, avec params explicites, sans doublon
         params_str = format_params(expected_method, expected_params)
         params_field = f" | Params: {params_str}" if params_str else ""
         info_line = f"URL: {current_url} | Method: {method}{params_field} | Status: {status} | Size: {size}"
@@ -405,7 +395,6 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
                     continue
                 h, m = item
                 h_norm = normalize_url(h)
-                # Filter out listing artifacts in hrefs
                 if is_logout_url(h) or should_ignore_listing(h) or is_listing_artifact(h):
                     detected_logout_urls.add(h)
                     continue
@@ -438,11 +427,9 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
                 })
 
     if silent:
-        # Print final status line
         print_silent_status(start_time, page_count, get_params_count, post_params_count)
-        print()  # Newline after last status
+        print()
 
-    # Compute summary lines
     total_files = sum(ext_counter.values())
     ext_summary = []
     for ext in sorted(ext_counter, key=lambda k: (-ext_counter[k], k)):
@@ -451,11 +438,9 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
     ext_summary_str = " | ".join(ext_summary)
     ext_stats_line = f"Detected files: {total_files} | {ext_summary_str}"
 
-    # Top 5 folders (non-recursive)
     folder_top = folder_counter.most_common(5)
     folder_stats_line = "Top 5 folders (most files, not recursive): " + " | ".join(f"{folder} ({count})" for folder, count in folder_top)
 
-    # GET params & POST params summary lines
     get_params_line = "GET parameters:\n"
     for param, urls in sorted(get_param_urls.items()):
         urlset = set(urls)
@@ -466,15 +451,12 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
         urlset = set(urls)
         post_params_line += f"  {param}: {', '.join(sorted(urlset))}\n"
 
-    # Read all info lines
     with open(output_file_info, 'r', encoding='utf-8') as f:
         info_lines = f.readlines()
 
-    # Compose timer/status line for top of file (even in silent mode)
     elapsed = int(time.time() - start_time)
     timer_status_line = f"[Timer: {elapsed}s] Pages: {page_count} | GET Params: {get_params_count} | POST Params: {post_params_count}"
 
-    # Rewrite the info.txt file with summary lines at the top
     with open(output_file_info, 'w', encoding='utf-8') as f:
         f.write(timer_status_line + "\n")
         f.write(ext_stats_line + "\n")
@@ -486,7 +468,7 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
             f.write(line)
 
     if not silent:
-        print("\n--- GLOBAL CRAWL REPORT ---")
+        print("\n--- GLOBAL REPORT ---")
         for entry in crawl_report:
             expected_method, params = get_expected_method_and_params(entry["url"], all_found_forms)
             params_str = format_params(expected_method, params)
@@ -494,7 +476,7 @@ def crawl(website, depth_max, root_domain, output_file_brut, output_file_info, c
             out = f'URL: {entry["url"]} | Method: {entry["method"]}{params_field} | Status: {entry["status"]} | Size: {entry["size"]}'
             print(out)
 
-        print("\n--- FOUND POST FORMS ---")
+        print("\n--- FOUND PARAMS ---")
         already_seen_forms = set()
         for form in all_found_forms:
             key = (normalize_url(form['url']), ','.join(form['params']) if form['params'] else '', form['depth'])
