@@ -2,7 +2,7 @@
 
 ## Overview
 
-**crawler.py** is a Python 3 web crawler for authenticated session crawling, designed for security auditing, penetration testing, and web reconnaissance.  
+**crawler3.py** is a Python 3 web crawler for authenticated session crawling, designed for security auditing, penetration testing, and web reconnaissance.  
 It explores websites, enumerates URLs (GET and POST), extracts forms and parameters, and outputs results to files for further analysis.  
 It is especially useful for crawling web applications where session cookies are required (such as admin panels), and where you want to avoid triggering logout/disconnect URLs that could break your session.
 
@@ -17,10 +17,9 @@ It is especially useful for crawling web applications where session cookies are 
 - **Detects and avoids crawling logout/disconnect/exit URLs** (configurable patterns: `logout.php`, `disconnect.php`, `exit.php`, `login.php?logout=1`, etc)
 - **Outputs two files:**  
   - `*-<domain>.txt`: List of all discovered URLs, including those with parameters.
-  - `*-<domain>_info.txt`: Detailed info with GET/POST parameters, response status, size, and depth.
+  - `*-<domain>_info.txt`: Detailed info with GET/POST parameters, response status, size, and depth, plus summary statistics at the top.
 - **Configurable output directory** (`--output`)
-- **Terminal output showing crawling progress and detailed info**
-- **All code and output in English**
+- **Terminal output showing crawling progress and stats (with `--silent` for minimal output)**
 
 ---
 
@@ -34,7 +33,7 @@ cd crawler
 python3 -m venv ~/.venv/crawler                                                              
 source ~/.venv/crawler/bin/activate
 pip3 install -r requirements.txt
-sudo cp crawler.py /usr/bin/crawler
+sudo cp crawler3.py /usr/bin/crawler
 sudo chmod +x /usr/bin/crawler
 ```
 
@@ -84,7 +83,7 @@ crawler --website "http://192.168.1.10:8080" --depth 5 --cookie "PHPSESSID=abcde
 
 ### Terminal
 
-For each URL crawled:
+For each URL crawled (unless `--silent` is used):
 ```
 Crawling (1/4): https://targetsite.com
 Crawling (2/4): https://targetsite.com/dashboard
@@ -92,18 +91,20 @@ Crawling (3/4): https://targetsite.com/admin.php
 ...
 ```
 
-For each result, detailed info is printed (matches info file):
-
+If `--silent` is used, you get a live line like:
 ```
-URL: https://targetsite.com/admin.php | Method: GET | Depth: 2 | Status: 200 | Size: 3254
-URL: https://targetsite.com/logout.php | Method: GET | Depth: 3 | Status: 200 | Size: 875 (not crawled to avoid breaking the cookie)
-...
+[Timer: 40s] Pages: 295 | GET Params: 22 | POST Params: 28
+```
+
+At the end, always:
+```
+Output written to: /path/to/outputdir/20250805_122845-www.icdc.caissedesdepots.fr.txt, /path/to/outputdir/20250805_122845-www.icdc.caissedesdepots.fr_info.txt
 ```
 
 ### Files
 
 #### `<date>-<domain>.txt`
-List of all unique URLs found:
+List of all unique URLs found (cleaned, no duplicates, sorted):
 ```
 https://targetsite.com
 https://targetsite.com/login.php
@@ -111,13 +112,24 @@ https://targetsite.com/login.php?error=1
 https://targetsite.com/admin.php
 https://targetsite.com/logout.php
 ```
-For URLs with GET parameters, the base URL is listed first, and parameterized URLs are listed directly below.
 
 #### `<date>-<domain>_info.txt`
-Detailed info for each request:
+This file begins with summary lines:
 ```
-URL: https://targetsite.com/login.php | Method: GET | Depth: 2 | GET: error | Nb_GET: 1 | Status: 200 | Size: 1234
-URL: https://targetsite.com/logout.php | Method: GET | Depth: 3 | Status: 200 | Size: 875 (not crawled to avoid breaking the cookie)
+[Timer: 40s] Pages: 295 | GET Params: 22 | POST Params: 28
+Detected files: 295 | PHP: 20 | HTML: 35 | JS: 25 | PNG: 10 | JPG: 15 | GIF: 2
+Top 5 folders (most files, not recursive): /admin/ (30) | /js/ (25) | /images/ (20) | /css/ (12) | / (10)
+GET parameters:
+  q: https://targetsite.com/search.php?q=test, https://targetsite.com/index.php?q=hello
+  page: https://targetsite.com/articles.php?page=2
+
+POST parameters:
+  username: https://targetsite.com/login.php
+  password: https://targetsite.com/login.php
+
+<...then follows the per-URL crawl info...>
+URL: https://targetsite.com/login.php | Method: POST | Params: (POST) username=admin | Status: 200 | Size: 1234
+URL: https://targetsite.com/search.php?q=test | Method: GET | Params: (GET) q=test | Status: 200 | Size: 2345
 ...
 ```
 
@@ -132,6 +144,7 @@ URL: https://targetsite.com/logout.php | Method: GET | Depth: 3 | Status: 200 | 
 | `--cookie, -c`   | Session cookie string                                    | `--cookie "PHPSESSID=xxx;token=yyy"`      |
 | `--output, -o`   | Output directory for result files                        | `--output /root/clients/ProjectX`         |
 | `--all`          | Crawl all file extensions (not just web/script types)     | `--all`                                   |
+| `--silent`       | Minimal terminal output. Only prints timer and stats line | `--silent`                                |
 
 ---
 
@@ -140,7 +153,6 @@ URL: https://targetsite.com/logout.php | Method: GET | Depth: 3 | Status: 200 | 
 The crawler:
 - Detects URLs matching logout/disconnect/exit patterns (`logout.php`, `disconnect.php`, `exit.php`, `login.php?logout=1`, etc).
 - Skips crawling these URLs to avoid breaking your session/cookie.
-- Still records them in output files, with `(not crawled to avoid breaking the cookie)` tag in the info file.
 
 ---
 
@@ -179,16 +191,9 @@ You will get:
 
 ## License
 
-MIT License
-
+BALEC
 ---
 
 ## Author
 
 - [shan0ar](https://github.com/shan0ar)
-
----
-
-## Support
-
-Open a GitHub issue or contact the author for support or feature requests.
